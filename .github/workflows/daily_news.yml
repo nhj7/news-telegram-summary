@@ -1,0 +1,35 @@
+name: Daily News Summary
+
+on:
+  schedule:
+    # 한국 시간(UTC+9) 오전 8시는 UTC 기준 전날 23:00입니다.
+    - cron: '0 23 * * *'
+  workflow_dispatch: # 수동으로 실행할 수 있는 버튼을 활성화합니다.
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          
+      - name: Install dependencies
+        run: npm install
+        
+      - name: Install Playwright Browsers
+        # 브라우저와 리눅스 필수 라이브러리를 함께 설치합니다.
+        run: npx playwright install chromium --with-deps
+        
+      - name: Run News Scraper
+        env:
+          # GitHub Secrets에 저장된 환경 변수를 불러옵니다.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: node index.js

@@ -1,0 +1,157 @@
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+const { chromium } = require('playwright');
+const axios = require('axios');
+const Parser = require('rss-parser');
+
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const CHAT_ID = process.env.CHAT_ID;
+
+const parser = new Parser();
+
+async function scrapeAll() {
+    const browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    });
+    const page = await context.newPage();
+
+    let allNews = [];
+
+    // 1. Daum Scaping
+    try {
+        await page.goto('https://news.daum.net/', { waitUntil: 'networkidle' });
+        const daum = await page.$$eval('a.item_newsheadline2, .tit_g a', elms => 
+            elms.map(el => ({ title: el.innerText.split('\n')[0].trim(), link: el.href, source: 'Daum' }))
+        );
+        allNews.push(...daum);
+    } catch (e) { console.error('Daum error', e); }
+
+    // 2. Google News RSS
+    try {
+        const feed = await parser.parseURL('https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko');
+        const google = feed.items.map(item => ({
+            title: item.title,
+            link: item.link,
+            source: 'Google'
+        }));
+        allNews.push(...google);
+    } catch (e) { console.error('Google RSS error', e); }
+
+    await browser.close();
+    return allNews.filter(n => n.title && n.title.length > 5);
+}
+
+async function getTopNewsWithGemini(newsList) {
+    const newsSummary = newsList.map((n, i) => `[${i}] 제목: ${n.title} (출처: ${n.source})`).join('\n');
+
+    const prompt = `
+당신은 전문 뉴스 편집자입니다. 아래 제공된 뉴스 목록을 분석하여 독자에게 가장 중요한 뉴스 7개를 선별해 주세요.
+
+**수행 작업:**
+1. **주제 중복 제거**: 동일한 사건이나 주제를 다루는 뉴스는 그룹화하고, 그 중 가장 정보량이 많거나 품질이 좋은 기사 하나만 선택하세요.
+2. **중요도 산정**: 시의성이 높고 사회적 영향력이 큰 뉴스를 우선하세요.
+3. **최종 선정**: 중복되지 않는 서로 다른 주제의 뉴스 7개를 선정하여 중요도 순으로 나열하세요.
+
+**응답 형식 (JSON 배열만 답변):**
+[
+  {"index": 번호, "reason": "선정 이유 요약"}
+]
+
+**뉴스 목록:**
+${newsSummary}
+    `;
+
+    try {
+        const response = await axios.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
+            {
+                contents: [{ parts: [{ text: prompt }] }]
+            }
+        );
+
+        const resultText = response.data.candidates[0].content.parts[0].text;
+        const jsonMatch = resultText.match(/\[[\s\S]*\]/);
+        const selectedIndices = JSON.parse(jsonMatch[0]);
+
+        return selectedIndices.map(item => ({
+            ...newsList[item.index],
+            reason: item.reason
+        }));
+    } catch (e) {
+        console.error('Gemini API Error:', e.response ? JSON.stringify(e.response.data) : e.message);
+        return newsList.slice(0, 7).map(n => ({ ...n, reason: 'AI 분석 실패로 자동 선정됨' }));
+    }
+}
+
+async function resolveFinalUrls(news) {
+    console.log('Resolving final URLs with Playwright...');
+    const browser = await chromium.launch({ headless: true });
+    const resolvedNews = [];
+
+    for (const item of news) {
+        if (!item.link.includes('google.com')) {
+            resolvedNews.push(item);
+            continue;
+        }
+
+        const page = await browser.newPage();
+        try {
+            // 구글 뉴스 리다이렉트 페이지 접속
+            await page.goto(item.link, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            // URL이 google.com이 아닐 때까지 대기하거나 5초 후 현재 URL 가져오기
+            try {
+                await page.waitForURL(u => !u.href.includes('google.com'), { timeout: 5000 });
+            } catch (e) { /* ignore timeout */ }
+            
+            resolvedNews.push({ ...item, link: page.url() });
+        } catch (e) {
+            console.error(`Failed to resolve URL for: ${item.title}`);
+            resolvedNews.push(item);
+        }
+        await page.close();
+    }
+
+    await browser.close();
+    return resolvedNews;
+}
+
+async function sendTelegram(news) {
+    const date = new Date().toISOString().split('T')[0];
+    let message = `🚀 [${date}] AI 엄선 주요 뉴스 TOP 7\n\n`;
+
+    news.forEach((n, i) => {
+        message += `${i + 1}. ${n.title}\n💡 ${n.reason}\n🔗 ${n.link}\n(출처: ${n.source})\n\n`;
+    });
+
+    message += `Gemini AI가 중복을 제거하고 선별한 목록입니다. 🍀`;
+
+    const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+    await axios.post(url, {
+        chat_id: CHAT_ID,
+        text: message
+    });
+}
+
+async function main() {
+    if (!TELEGRAM_TOKEN || !GEMINI_API_KEY) {
+        throw new Error('Missing environment variables.');
+    }
+
+    console.log('Step 1: Scaping all news...');
+    const allNews = await scrapeAll();
+    console.log(`Collected ${allNews.length} news items.`);
+
+    console.log('Step 2: AI Filtering (Gemini)...');
+    const topNews = await getTopNewsWithGemini(allNews);
+
+    console.log('Step 3: Resolving final URLs...');
+    const finalNews = await resolveFinalUrls(topNews);
+
+    console.log('Step 4: Sending to Telegram...');
+    await sendTelegram(finalNews);
+    console.log('Successfully finished!');
+}
+
+main().catch(console.error);
