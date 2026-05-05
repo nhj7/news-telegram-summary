@@ -19,20 +19,31 @@ async function scrapeAll() {
 
     let allNews = [];
 
-    // 1. Daum Scaping
+    // 1. Daum Scaping (제목 + 요약)
     try {
         await page.goto('https://news.daum.net/', { waitUntil: 'networkidle' });
-        const daum = await page.$$eval('a.item_newsheadline2, .tit_g a', elms => 
-            elms.map(el => ({ title: el.innerText.split('\n')[0].trim(), link: el.href, source: 'Daum' }))
+        const daum = await page.$$eval('.list_newsissue li', elms => 
+            elms.map(el => {
+                const a = el.querySelector('.tit_g a') || el.querySelector('a.item_newsheadline2');
+                const desc = el.querySelector('.desc_g');
+                if (!a) return null;
+                return { 
+                    title: a.innerText.split('\n')[0].trim(), 
+                    description: desc ? desc.innerText.trim() : '',
+                    link: a.href, 
+                    source: 'Daum' 
+                };
+            }).filter(item => item !== null)
         );
         allNews.push(...daum);
     } catch (e) { console.error('Daum error', e); }
 
-    // 2. Google News RSS
+    // 2. Google News RSS (제목 + 요약)
     try {
         const feed = await parser.parseURL('https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko');
         const google = feed.items.map(item => ({
             title: item.title,
+            description: item.contentSnippet || item.content || '',
             link: item.link,
             source: 'Google'
         }));
@@ -44,15 +55,18 @@ async function scrapeAll() {
 }
 
 async function getTopNewsWithGemini(newsList) {
-    const newsSummary = newsList.map((n, i) => `[${i}] 제목: ${n.title} (출처: ${n.source})`).join('\n');
+    // 뉴스 목록을 요약 정보와 함께 구성
+    const newsSummary = newsList.map((n, i) => 
+        `[${i}] 제목: ${n.title}\n요약: ${n.description.substring(0, 100)}\n출처: ${n.source}`
+    ).join('\n\n');
 
     const prompt = `
-당신은 전문 뉴스 편집자입니다. 아래 제공된 뉴스 목록을 분석하여 독자에게 가장 중요한 뉴스 7개를 선별해 주세요.
+당신은 전문 뉴스 편집자입니다. 아래 제공된 뉴스 목록을 분석하여 독자에게 가장 중요한 뉴스 10개를 선별해 주세요.
 
 **수행 작업:**
 1. **주제 중복 제거**: 동일한 사건이나 주제를 다루는 뉴스는 그룹화하고, 그 중 가장 정보량이 많거나 품질이 좋은 기사 하나만 선택하세요.
 2. **중요도 산정**: 시의성이 높고 사회적 영향력이 큰 뉴스를 우선하세요.
-3. **최종 선정**: 중복되지 않는 서로 다른 주제의 뉴스 7개를 선정하여 중요도 순으로 나열하세요.
+3. **최종 선정**: 중복되지 않는 서로 다른 주제의 뉴스 10개를 선정하여 중요도 순으로 나열하세요.
 
 **응답 형식 (JSON 배열만 답변):**
 [
@@ -81,7 +95,7 @@ ${newsSummary}
         }));
     } catch (e) {
         console.error('Gemini API Error:', e.response ? JSON.stringify(e.response.data) : e.message);
-        return newsList.slice(0, 7).map(n => ({ ...n, reason: 'AI 분석 실패로 자동 선정됨' }));
+        return newsList.slice(0, 10).map(n => ({ ...n, reason: 'AI 분석 실패로 자동 선정됨' }));
     }
 }
 
@@ -98,16 +112,12 @@ async function resolveFinalUrls(news) {
 
         const page = await browser.newPage();
         try {
-            // 구글 뉴스 리다이렉트 페이지 접속
             await page.goto(item.link, { waitUntil: 'domcontentloaded', timeout: 15000 });
-            // URL이 google.com이 아닐 때까지 대기하거나 5초 후 현재 URL 가져오기
             try {
                 await page.waitForURL(u => !u.href.includes('google.com'), { timeout: 5000 });
-            } catch (e) { /* ignore timeout */ }
-            
+            } catch (e) {}
             resolvedNews.push({ ...item, link: page.url() });
         } catch (e) {
-            console.error(`Failed to resolve URL for: ${item.title}`);
             resolvedNews.push(item);
         }
         await page.close();
@@ -119,13 +129,13 @@ async function resolveFinalUrls(news) {
 
 async function sendTelegram(news) {
     const date = new Date().toISOString().split('T')[0];
-    let message = `🚀 [${date}] AI 엄선 주요 뉴스 TOP 7\n\n`;
+    let message = `🚀 [${date}] AI 엄선 주요 뉴스 TOP 10\n\n`;
 
     news.forEach((n, i) => {
         message += `${i + 1}. ${n.title}\n💡 ${n.reason}\n🔗 ${n.link}\n(출처: ${n.source})\n\n`;
     });
 
-    message += `Gemini AI가 중복을 제거하고 선별한 목록입니다. 🍀`;
+    message += `Gemini AI가 상세 요약 정보를 바탕으로 선별한 목록입니다. 🍀`;
 
     const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
     await axios.post(url, {
@@ -139,11 +149,11 @@ async function main() {
         throw new Error('Missing environment variables.');
     }
 
-    console.log('Step 1: Scaping all news...');
+    console.log('Step 1: Scaping all news with descriptions...');
     const allNews = await scrapeAll();
     console.log(`Collected ${allNews.length} news items.`);
 
-    console.log('Step 2: AI Filtering (Gemini)...');
+    console.log('Step 2: AI Filtering (Gemini) - Top 10...');
     const topNews = await getTopNewsWithGemini(allNews);
 
     console.log('Step 3: Resolving final URLs...');
