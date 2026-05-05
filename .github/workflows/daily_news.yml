@@ -4,12 +4,10 @@ on:
   push:
     branches: [ main ]
   schedule:
-    # 10분마다 실행 설정
-    - cron: '*/10 * * * *'
+    # 한국 시간 06:30 (UTC 21:30) 및 17:30 (UTC 08:30)
+    - cron: '30 21 * * *'
+    - cron: '30 8 * * *'
   workflow_dispatch:
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   run-scraper:
