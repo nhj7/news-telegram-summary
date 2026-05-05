@@ -1,6 +1,8 @@
 name: Daily News Summary
 
 on:
+  push:
+    branches: [ main ]
   schedule:
     # 10분마다 실행 설정
     - cron: '*/10 * * * *'
