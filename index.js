@@ -9,6 +9,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
 
 const parser = new Parser();
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function scrapeAll() {
     const browser = await chromium.launch({ headless: true });
@@ -55,7 +56,6 @@ async function scrapeAll() {
 }
 
 async function getTopNewsWithGemini(newsList) {
-    // 뉴스 목록을 요약 정보와 함께 구성
     const newsSummary = newsList.map((n, i) => 
         `[${i}] 제목: ${n.title}\n요약: ${n.description.substring(0, 100)}\n출처: ${n.source}`
     ).join('\n\n');
@@ -77,26 +77,43 @@ async function getTopNewsWithGemini(newsList) {
 ${newsSummary}
     `;
 
-    try {
-        const response = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
-            {
-                contents: [{ parts: [{ text: prompt }] }]
+    let lastError = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const response = await axios.post(
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
+                {
+                    contents: [{ parts: [{ text: prompt }] }]
+                }
+            );
+
+            const resultText = response.data.candidates[0].content.parts[0].text;
+            const jsonMatch = resultText.match(/\[[\s\S]*\]/);
+            const selectedIndices = JSON.parse(jsonMatch[0]);
+
+            return {
+                news: selectedIndices.map(item => ({
+                    ...newsList[item.index],
+                    reason: item.reason
+                })),
+                error: null
+            };
+        } catch (e) {
+            lastError = e.response ? e.response.data.error : { message: e.message };
+            console.error(`Gemini API Attempt ${attempt} failed:`, lastError);
+            
+            if (attempt < 3) {
+                console.log('Waiting 1 minute before retry...');
+                await sleep(60000); // 1분 대기
             }
-        );
-
-        const resultText = response.data.candidates[0].content.parts[0].text;
-        const jsonMatch = resultText.match(/\[[\s\S]*\]/);
-        const selectedIndices = JSON.parse(jsonMatch[0]);
-
-        return selectedIndices.map(item => ({
-            ...newsList[item.index],
-            reason: item.reason
-        }));
-    } catch (e) {
-        console.error('Gemini API Error:', e.response ? JSON.stringify(e.response.data) : e.message);
-        return newsList.slice(0, 10).map(n => ({ ...n, reason: 'AI 분석 실패로 자동 선정됨' }));
+        }
     }
+
+    // 3회 재시도 모두 실패 시
+    return {
+        news: newsList.slice(0, 10).map(n => ({ ...n, reason: 'AI 분석 실패로 자동 선정됨' })),
+        error: lastError
+    };
 }
 
 async function resolveFinalUrls(news) {
@@ -127,13 +144,19 @@ async function resolveFinalUrls(news) {
     return resolvedNews;
 }
 
-async function sendTelegram(news) {
+async function sendTelegram(news, errorInfo = null) {
     const date = new Date().toISOString().split('T')[0];
     let message = `🚀 [${date}] AI 엄선 주요 뉴스 TOP 10\n\n`;
 
     news.forEach((n, i) => {
         message += `${i + 1}. ${n.title}\n💡 ${n.reason}\n🔗 ${n.link}\n(출처: ${n.source})\n\n`;
     });
+
+    if (errorInfo) {
+        message += `⚠️ AI 분석 중 에러가 발생하여 기본 목록으로 발송되었습니다.\n`;
+        message += `에러 코드: ${errorInfo.code || 'N/A'}\n`;
+        message += `에러 메시지: ${errorInfo.message}\n\n`;
+    }
 
     message += `Gemini AI가 상세 요약 정보를 바탕으로 선별한 목록입니다. 🍀`;
 
@@ -153,14 +176,14 @@ async function main() {
     const allNews = await scrapeAll();
     console.log(`Collected ${allNews.length} news items.`);
 
-    console.log('Step 2: AI Filtering (Gemini) - Top 10...');
-    const topNews = await getTopNewsWithGemini(allNews);
+    console.log('Step 2: AI Filtering (Gemini) - Top 10 with Retry Logic...');
+    const { news: topNews, error: errorInfo } = await getTopNewsWithGemini(allNews);
 
     console.log('Step 3: Resolving final URLs...');
     const finalNews = await resolveFinalUrls(topNews);
 
     console.log('Step 4: Sending to Telegram...');
-    await sendTelegram(finalNews);
+    await sendTelegram(finalNews, errorInfo);
     console.log('Successfully finished!');
 }
 
