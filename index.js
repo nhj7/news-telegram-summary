@@ -61,12 +61,12 @@ async function getTopNewsWithGemini(newsList) {
     ).join('\n\n');
 
     const prompt = `
-당신은 전문 뉴스 편집자입니다. 아래 제공된 뉴스 목록을 분석하여 독자에게 가장 중요한 뉴스 10개를 선별해 주세요.
+당신은 전문 뉴스 편집자입니다. 아래 제공된 뉴스 목록을 분석하여 독자에게 가장 중요한 뉴스 15개를 선별해 주세요.
 
 **수행 작업:**
 1. **주제 중복 제거**: 동일한 사건이나 주제를 다루는 뉴스는 그룹화하고, 그 중 가장 정보량이 많거나 품질이 좋은 기사 하나만 선택하세요.
 2. **중요도 산정**: 시의성이 높고 사회적 영향력이 큰 뉴스를 우선하세요.
-3. **최종 선정**: 중복되지 않는 서로 다른 주제의 뉴스 10개를 선정하여 중요도 순으로 나열하세요.
+3. **최종 선정**: 중복되지 않는 서로 다른 주제의 뉴스 15개를 선정하여 중요도 순으로 나열하세요.
 
 **응답 형식 (JSON 배열만 답변):**
 [
@@ -109,9 +109,8 @@ ${newsSummary}
         }
     }
 
-    // 3회 재시도 모두 실패 시
     return {
-        news: newsList.slice(0, 10).map(n => ({ ...n, reason: 'AI 분석 실패로 자동 선정됨' })),
+        news: newsList.slice(0, 15).map(n => ({ ...n, reason: 'AI 분석 실패로 자동 선정됨' })),
         error: lastError
     };
 }
@@ -146,7 +145,7 @@ async function resolveFinalUrls(news) {
 
 async function sendTelegram(news, errorInfo = null) {
     const date = new Date().toISOString().split('T')[0];
-    let message = `🚀 [${date}] AI 엄선 주요 뉴스 TOP 10\n\n`;
+    let message = `🚀 [${date}] AI 엄선 주요 뉴스 TOP 15\n\n`;
 
     news.forEach((n, i) => {
         message += `${i + 1}. ${n.title}\n💡 ${n.reason}\n🔗 ${n.link}\n(출처: ${n.source})\n\n`;
@@ -176,7 +175,7 @@ async function main() {
     const allNews = await scrapeAll();
     console.log(`Collected ${allNews.length} news items.`);
 
-    console.log('Step 2: AI Filtering (Gemini) - Top 10 with Retry Logic...');
+    console.log('Step 2: AI Filtering (Gemini) - Top 15 with Retry Logic...');
     const { news: topNews, error: errorInfo } = await getTopNewsWithGemini(allNews);
 
     console.log('Step 3: Resolving final URLs...');
