@@ -5,7 +5,7 @@ AI 기반 뉴스 수집 및 큐레이션 자동화 도구입니다. 매일 정�
 ## 🌟 주요 기능
 
 - **다채로운 뉴스 수집**: 다음(Daum) 뉴스 및 구글 뉴스 RSS를 통해 실시간 주요 뉴스를 수집합니다.
-- **AI 스마트 큐레이션**: Gemini 1.5 Flash 모델을 사용하여 수백 개의 뉴스 중 중복 주제를 제거하고 가장 중요한 15개 뉴스를 선별합니다.
+- **AI 스마트 큐레이션**: 최신 Gemini 3.x Flash 모델을 사용하여 수백 개의 뉴스 중 중복 주제를 제거하고 가장 중요한 15개 뉴스를 선별합니다.
 - **상세 분석 제공**: 각 뉴스별로 AI가 분석한 '선정 이유(💡)'를 함께 제공합니다.
 - **짧은 원문 링크**: 구글 뉴스의 긴 리다이렉트 주소를 Playwright를 통해 실제 언론사 원문 주소로 변환하여 가독성을 높였습니다.
 - **높은 안정성**: API 호출 실패 시 자동 재시도(3회) 로직 및 에러 알림 기능을 포함합니다.
@@ -15,7 +15,7 @@ AI 기반 뉴스 수집 및 큐레이션 자동화 도구입니다. 매일 정�
 
 - **Runtime**: Node.js (v24+)
 - **Scraping**: Playwright, RSS-Parser
-- **AI**: Google Gemini API (gemini-flash-latest)
+- **AI**: Google Gemini API (gemini-flash-latest, v3.x 기반)
 - **Communication**: Telegram Bot API (Axios)
 - **Automation**: GitHub Actions
 
